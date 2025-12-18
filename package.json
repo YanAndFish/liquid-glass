@@ -42,7 +42,7 @@
     "type-check": "vue-tsc -b --noEmit",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "release": "ppnm build && bumpp --commit --push --tag && pnpm publish"
+    "release": "pnpm build && bumpp --commit --push --tag && pnpm publish"
   },
   "peerDependencies": {
     "vue": "^3.5.25"
