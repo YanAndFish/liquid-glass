@@ -1,38 +1,57 @@
 {
   "name": "@yafh/liquid-glass",
+  "type": "module",
   "version": "1.0.0",
   "private": false,
+  "packageManager": "pnpm@10.24.0",
   "description": "Liquid Glass is a library for creating beautiful, responsive, and accessible UI components.",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "author": "YanAndFish",
+  "license": "MIT",
+  "homepage": "https://github.com/YanAndFish/liquid-glass",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YanAndFish/liquid-glass.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YanAndFish/liquid-glass/issues"
   },
   "keywords": [
     "ui",
     "components",
     "liquid-glass"
   ],
-  "author": "YanAndFish",
-  "license": "MIT",
-  "packageManager": "pnpm@10.24.0",
-  "homepage": "https://github.com/yafh/liquid-glass",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yafh/liquid-glass.git"
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
   },
-  "bugs": {
-    "url": "https://github.com/yafh/liquid-glass/issues"
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "type-check": "vue-tsc -b --noEmit",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "release": "ppnm build && bumpp --commit --push --tag && pnpm publish"
+  },
+  "dependencies": {
+    "vue": "^3.5.25"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^6.7.1",
+    "@types/node": "^25.0.3",
     "@yafh/tsconfig": "^0.3.2",
     "bumpp": "^10.3.2",
     "eslint": "^9.39.2",
     "tsdown": "^0.18.1",
     "typescript": "^5.9.3",
+    "unplugin-vue": "^7.1.0",
     "vue-tsc": "^3.1.8"
-  },
-  "dependencies": {
-    "vue": "^3.5.25"
   }
 }

@@ -1,0 +1,11 @@
+{
+  "extends": "@yafh/tsconfig/tsconfig.vue.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+
+  "include": ["src/**/*"]
+}
