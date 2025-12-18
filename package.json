@@ -1,0 +1,38 @@
+{
+  "name": "@yafh/liquid-glass",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Liquid Glass is a library for creating beautiful, responsive, and accessible UI components.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ui",
+    "components",
+    "liquid-glass"
+  ],
+  "author": "YanAndFish",
+  "license": "MIT",
+  "packageManager": "pnpm@10.24.0",
+  "homepage": "https://github.com/yafh/liquid-glass",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yafh/liquid-glass.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yafh/liquid-glass/issues"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^6.7.1",
+    "@yafh/tsconfig": "^0.3.2",
+    "bumpp": "^10.3.2",
+    "eslint": "^9.39.2",
+    "tsdown": "^0.18.1",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.1.8"
+  },
+  "dependencies": {
+    "vue": "^3.5.25"
+  }
+}
