@@ -8,6 +8,10 @@ const props = withDefaults(
     contentClass?: string
     /** 内容层样式（内联对象或字符串） */
     contentStyle?: CSSProperties | string
+    /** 玻璃底色（覆盖在背景之上的半透明色，用于微调整体观感） */
+    backgroundColor?: string
+    /** 阴影等级（0=无阴影，1=默认，>1 更强） */
+    shadowLevel?: number
     /** 位移强度（对应 SVG feDisplacementMap 的 scale） */
     displacementScale?: number
     /** 背景模糊强度（px，用于 backdrop-filter） */
@@ -16,6 +20,12 @@ const props = withDefaults(
     saturation?: number
     /** 色散强度（越大边缘色差越明显） */
     aberrationIntensity?: number
+    /** 边缘高光角度（deg，遵循 CSS linear-gradient 角度：0=上，90=右） */
+    edgeHighlightAngle?: number
+    /** 边缘高光强度（0=关闭，1=默认，>1 更亮） */
+    edgeHighlightIntensity?: number
+    /** 边缘高光颜色（CSS 颜色字符串） */
+    edgeHighlightColor?: string
     /** 边缘环宽度（px），用于模拟 Apple 风格“厚透镜边缘” */
     edgeRingWidthPx?: number
     /** 边缘环模糊强度（px），通常小于中心 blur（边缘更“清晰”） */
@@ -38,20 +48,25 @@ const props = withDefaults(
     edgeHardness?: number
   }>(),
   {
-    displacementScale: 45,
-    blurPx: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    shadowLevel: 1,
+    displacementScale: 70,
+    blurPx: 4,
     saturation: 140,
-    aberrationIntensity: 2,
-    edgeRingWidthPx: 16,
-    edgeBlurPx: 6,
-    edgeSaturation: 170,
-    edgeDisplacementScale: 70,
-    edgeAberrationIntensity: 2.8,
+    aberrationIntensity: 3,
+    edgeHighlightAngle: 135,
+    edgeHighlightIntensity: 1,
+    edgeHighlightColor: '#fff',
+    edgeRingWidthPx: 4,
+    edgeBlurPx: 1,
+    edgeSaturation: 100,
+    edgeDisplacementScale: 110,
+    edgeAberrationIntensity: 1.7,
     edgeInnerFeatherPx: 0,
     debugEdgeRingMap: false,
     debugNormalMap: false,
-    flatAreaScale: 0.82,
-    edgeHardness: 1,
+    flatAreaScale: 0.64,
+    edgeHardness: 0.5,
   },
 )
 
@@ -60,10 +75,15 @@ export type GlassProps = ExtractPropTypes<typeof props>
 const {
   contentClass,
   contentStyle,
+  backgroundColor,
+  shadowLevel,
   displacementScale,
   blurPx,
   saturation,
   aberrationIntensity,
+  edgeHighlightAngle,
+  edgeHighlightIntensity,
+  edgeHighlightColor,
   edgeRingWidthPx,
   edgeBlurPx,
   edgeSaturation,
@@ -425,6 +445,39 @@ function createDomId(prefix: string): string {
   return `${prefix}-${cryptoUuid}`
 }
 
+/** 将角度归一化到 [0, 360)。 */
+function normalizeAngleDeg(angle: number): number {
+  const normalized = angle % 360
+  return normalized < 0 ? normalized + 360 : normalized
+}
+
+/**
+ * 将 CSS linear-gradient 的角度转换为 SVG linearGradient 的 x1/y1/x2/y2（0~1）。
+ *
+ * 说明：
+ * - CSS 角度：0=上，90=右，180=下，270=左
+ * - SVG 坐标：x 向右增大，y 向下增大
+ * @param angleDeg 渐变角度（deg）
+ */
+function cssAngleToSvgLinearGradientPoints(angleDeg: number) {
+  const safeAngle = Number.isFinite(angleDeg) ? angleDeg : 135
+  const rad = normalizeAngleDeg(safeAngle) * Math.PI / 180
+
+  // 将 CSS 角度转换为屏幕坐标向量：0deg 指向上方
+  const dx = Math.sin(rad)
+  const dy = -Math.cos(rad)
+
+  // 将向量延伸到边界，保证渐变从盒子边缘开始到边缘结束
+  const denom = Math.max(1e-6, Math.max(Math.abs(dx), Math.abs(dy)))
+  const t = 0.5 / denom
+
+  const x1 = clamp01(0.5 - dx * t)
+  const y1 = clamp01(0.5 - dy * t)
+  const x2 = clamp01(0.5 + dx * t)
+  const y2 = clamp01(0.5 + dy * t)
+  return { x1, y1, x2, y2 }
+}
+
 const filterId = createDomId('glass-filter')
 const edgeFilterId = createDomId('glass-edge-filter')
 const borderSoftGradientId = createDomId('glass-border-gradient-soft')
@@ -617,6 +670,25 @@ const borderStroke = computed(() => {
   }
 })
 
+/** 边缘高光参数：角度/颜色/强度（仅影响边框高光，不影响折射层）。 */
+const edgeHighlight = computed(() => {
+  const { x1, y1, x2, y2 } = cssAngleToSvgLinearGradientPoints(edgeHighlightAngle.value)
+  const intensity = Number.isFinite(edgeHighlightIntensity.value)
+    ? Math.max(0, edgeHighlightIntensity.value)
+    : 1
+  const color = edgeHighlightColor.value?.trim() || '#fff'
+
+  return {
+    x1,
+    y1,
+    x2,
+    y2,
+    color,
+    softOpacity: clamp01(0.28 * intensity),
+    strongOpacity: clamp01(0.85 * intensity),
+  }
+})
+
 /** 边缘环宽度（px）：限制到当前尺寸下的可用范围，避免负尺寸或反向圆角 */
 const edgeRingWidthSafePx = computed(() => {
   const raw = Math.max(0, edgeRingWidthPx.value)
@@ -636,6 +708,28 @@ const edgeFilterParams = computed(() => {
 
 /** 是否处于“显示贴图”的调试模式（会隐藏玻璃效果层，避免干扰观察） */
 const isDebugMapMode = computed(() => debugNormalMap.value || debugEdgeRingMap.value)
+
+/**
+ * 根据阴影等级生成容器阴影（box-shadow）。
+ * @param level 阴影等级（0=无阴影）
+ */
+function createGlassContainerShadow(level: number): string {
+  const safeLevel = Number.isFinite(level) ? Math.max(0, level) : 1
+  if (safeLevel <= 0)
+    return 'none'
+
+  const y = Math.max(0, 18 * safeLevel)
+  const blur = Math.max(0, 60 * safeLevel)
+  const alpha = clamp01(0.35 * safeLevel)
+  return `0 ${y.toFixed(1).replace(/\.0$/, '')}px ${blur.toFixed(1).replace(/\.0$/, '')}px rgba(0, 0, 0, ${alpha.toFixed(3)})`
+}
+
+/** 玻璃容器样式：暴露阴影等级等外观参数。 */
+const containerStyle = computed<CSSProperties>(() => {
+  return {
+    boxShadow: createGlassContainerShadow(shadowLevel.value),
+  } as CSSProperties
+})
 
 const edgeWarpStyle = computed<CSSProperties>(() => {
   // 边缘环亮度补偿：抵消“厚度/阴影”带来的整体变暗，避免环内侧发灰
@@ -683,11 +777,13 @@ const showEdgeLayer = computed(
 
 const warpStyle = computed<CSSProperties>(() => {
   const backdrop = `blur(${blurPx.value}px) saturate(${saturation.value}%)`
+  const bg = backgroundColor.value?.trim()
   return {
     // 贴图未生成前先降级为纯 backdrop-filter，避免 feImage 空 href 导致的闪烁/告警
     filter: normalMapUrl.value && !isDebugMapMode.value ? `url(#${filterId})` : undefined,
     backdropFilter: backdrop,
     WebkitBackdropFilter: backdrop,
+    background: bg || undefined,
   } as CSSProperties
 })
 
@@ -735,7 +831,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="glass-container">
+  <div ref="containerRef" class="glass-container" :style="containerStyle">
     <svg class="glass-svg" :width="svgSize.width" :height="svgSize.height" aria-hidden="true">
       <defs>
         <filter
@@ -1015,18 +1111,30 @@ onUnmounted(() => {
         aria-hidden="true"
       >
         <defs>
-          <!-- 固定光照方向：左上 → 右下（对应 CSS 135deg 的常见视觉） -->
-          <linearGradient :id="borderSoftGradientId" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#fff" stop-opacity="0" />
-            <stop offset="33%" stop-color="#fff" :stop-opacity="0.12" />
-            <stop offset="66%" stop-color="#fff" :stop-opacity="0.4" />
-            <stop offset="100%" stop-color="#fff" stop-opacity="0" />
+          <!-- 边缘高光（方向/颜色/强度可配置） -->
+          <linearGradient
+            :id="borderSoftGradientId"
+            :x1="edgeHighlight.x1"
+            :y1="edgeHighlight.y1"
+            :x2="edgeHighlight.x2"
+            :y2="edgeHighlight.y2"
+          >
+            <stop offset="0%" :stop-color="edgeHighlight.color" stop-opacity="0" />
+            <stop offset="33%" :stop-color="edgeHighlight.color" stop-opacity="0.12" />
+            <stop offset="66%" :stop-color="edgeHighlight.color" stop-opacity="0.4" />
+            <stop offset="100%" :stop-color="edgeHighlight.color" stop-opacity="0" />
           </linearGradient>
-          <linearGradient :id="borderStrongGradientId" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#fff" stop-opacity="0" />
-            <stop offset="33%" stop-color="#fff" :stop-opacity="0.32" />
-            <stop offset="66%" stop-color="#fff" :stop-opacity="0.6" />
-            <stop offset="100%" stop-color="#fff" stop-opacity="0" />
+          <linearGradient
+            :id="borderStrongGradientId"
+            :x1="edgeHighlight.x1"
+            :y1="edgeHighlight.y1"
+            :x2="edgeHighlight.x2"
+            :y2="edgeHighlight.y2"
+          >
+            <stop offset="0%" :stop-color="edgeHighlight.color" stop-opacity="0" />
+            <stop offset="33%" :stop-color="edgeHighlight.color" stop-opacity="0.32" />
+            <stop offset="66%" :stop-color="edgeHighlight.color" stop-opacity="0.6" />
+            <stop offset="100%" :stop-color="edgeHighlight.color" stop-opacity="0" />
           </linearGradient>
         </defs>
         <rect
@@ -1039,7 +1147,7 @@ onUnmounted(() => {
           fill="none"
           :stroke="`url(#${borderSoftGradientId})`"
           :stroke-width="borderStroke.strokeWidth"
-          opacity="0.28"
+          :opacity="edgeHighlight.softOpacity"
           stroke-linejoin="round"
           vector-effect="non-scaling-stroke"
         />
@@ -1053,7 +1161,7 @@ onUnmounted(() => {
           fill="none"
           :stroke="`url(#${borderStrongGradientId})`"
           :stroke-width="borderStroke.strokeWidth"
-          opacity="0.85"
+          :opacity="edgeHighlight.strongOpacity"
           stroke-linejoin="round"
           vector-effect="non-scaling-stroke"
         />

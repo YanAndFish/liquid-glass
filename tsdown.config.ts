@@ -151,6 +151,9 @@ function createWebComponentStyleInjection(css: string): string {
     `if (typeof Glass !== 'undefined' && Glass && Glass.def) {`,
     `  Glass.def.styles = [__liquidGlassCss];`,
     `}`,
+    `if (typeof GlassDebugPanel !== 'undefined' && GlassDebugPanel && GlassDebugPanel.def) {`,
+    `  GlassDebugPanel.def.styles = [__liquidGlassCss];`,
+    `}`,
   ].join('\n')
 }
 
