@@ -1,7 +1,61 @@
 <script setup lang="ts">
-import type { CSSProperties } from 'vue'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { glassProps } from './glass-props'
+import type { CSSProperties, ExtractPropTypes } from 'vue'
+import { computed, onMounted, onUnmounted, ref, toRefs, watch } from 'vue'
+
+const props = withDefaults(
+  defineProps<{
+    /** 内容层额外类名 */
+    contentClass?: string
+    /** 内容层样式（内联对象或字符串） */
+    contentStyle?: CSSProperties | string
+    /** 位移强度（对应 SVG feDisplacementMap 的 scale） */
+    displacementScale?: number
+    /** 背景模糊强度（px，用于 backdrop-filter） */
+    blurPx?: number
+    /** 背景饱和度（%，用于 backdrop-filter） */
+    saturation?: number
+    /** 色散强度（越大边缘色差越明显） */
+    aberrationIntensity?: number
+    /** 边缘环宽度（px），用于模拟 Apple 风格“厚透镜边缘” */
+    edgeRingWidthPx?: number
+    /** 边缘环模糊强度（px），通常小于中心 blur（边缘更“清晰”） */
+    edgeBlurPx?: number
+    /** 边缘环饱和度（%，用于让边缘更“晶莹”） */
+    edgeSaturation?: number
+    /** 边缘环位移强度（对应 SVG feDisplacementMap 的 scale），通常大于中心 */
+    edgeDisplacementScale?: number
+    /** 边缘环色散强度（越大边缘色差越明显） */
+    edgeAberrationIntensity?: number
+    /** 边缘环内侧过渡宽度（px），0 表示自动（用于让 ring → center 更柔和） */
+    edgeInnerFeatherPx?: number
+    /** 调试：仅显示“边缘环区域”的位移贴图（用于观察 ring 区域） */
+    debugEdgeRingMap?: boolean
+    /** 调试：显示动态生成的法线/位移贴图（不应用到滤镜） */
+    debugNormalMap?: boolean
+    /** 位移贴图：平坦区大小（0~1，按四边等宽 inset 控制，越大越贴近容器边缘） */
+    flatAreaScale?: number
+    /** 位移贴图：边缘硬度（越大越硬，过渡越短） */
+    edgeHardness?: number
+  }>(),
+  {
+    displacementScale: 45,
+    blurPx: 10,
+    saturation: 140,
+    aberrationIntensity: 2,
+    edgeRingWidthPx: 16,
+    edgeBlurPx: 6,
+    edgeSaturation: 170,
+    edgeDisplacementScale: 70,
+    edgeAberrationIntensity: 2.8,
+    edgeInnerFeatherPx: 0,
+    debugEdgeRingMap: false,
+    debugNormalMap: false,
+    flatAreaScale: 0.82,
+    edgeHardness: 1,
+  },
+)
+
+export type GlassProps = ExtractPropTypes<typeof props>
 
 const {
   contentClass,
@@ -17,10 +71,9 @@ const {
   edgeAberrationIntensity,
   edgeInnerFeatherPx,
   debugEdgeRingMap,
-  debugNormalMap,
-  flatAreaScale,
-  edgeHardness,
-} = defineProps(glassProps)
+} = toRefs(props)
+const { debugNormalMap } = toRefs(props)
+const { flatAreaScale, edgeHardness } = toRefs(props)
 
 /** 二维向量（用于 UV 坐标与位移计算） */
 interface Vec2 {
@@ -379,6 +432,8 @@ const borderStrongGradientId = createDomId('glass-border-gradient-strong')
 
 /** 边缘高光边框宽度（px），用于绘制 SVG stroke */
 const highlightBorderWidthPx = 1.5
+/** 位移/遮罩贴图可用的最大像素数（约 33MP），超出时直接降级以避免 OOM */
+const MAX_PIXEL_BUDGET = 33_000_000
 
 const containerRef = ref<HTMLDivElement | null>(null)
 const svgSize = ref({ width: 1, height: 1 })
@@ -445,8 +500,22 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
       width,
       height,
       borderRadiusPx: nextBorderRadiusPx,
-      flatAreaScale,
-      edgeHardness,
+      flatAreaScale: flatAreaScale.value,
+      edgeHardness: edgeHardness.value,
+    }
+
+    const pixelCount = width * height
+    const exceedsPixelBudget = pixelCount > MAX_PIXEL_BUDGET
+
+    if (exceedsPixelBudget) {
+      edgeMaskUrl.value = ''
+      lastEdgeMaskMeta.value = null
+      normalMapUrl.value = ''
+      lastNormalMapMeta.value = null
+      console.warn?.(
+        `[glass] 跳过贴图生成：${width}x${height} 超过 ${MAX_PIXEL_BUDGET.toLocaleString()} 像素上限，已降级为纯 backdrop-filter（可能是 CSS 失效导致尺寸异常）。`,
+      )
+      return
     }
 
     const lastMeta = lastNormalMapMeta.value
@@ -461,7 +530,7 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
     // 更新边缘环遮罩（用于 ring → center 的平滑过渡）
     if (maskGenerator) {
       const maxInset = Math.max(0, Math.min(width, height) / 2 - 1)
-      const ringWidthPx = Math.min(Math.max(0, edgeRingWidthPx), maxInset)
+      const ringWidthPx = Math.min(Math.max(0, edgeRingWidthPx.value), maxInset)
 
       if (ringWidthPx <= 0) {
         edgeMaskUrl.value = ''
@@ -469,8 +538,8 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
       }
       else {
         const innerFeatherPx
-          = edgeInnerFeatherPx > 0
-            ? Math.min(edgeInnerFeatherPx, maxInset)
+          = edgeInnerFeatherPx.value > 0
+            ? Math.min(edgeInnerFeatherPx.value, maxInset)
             : Math.max(4, Math.min(24, ringWidthPx * 0.9))
         const outerFeatherPx = 1.5
 
@@ -517,8 +586,8 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
       width,
       height,
       borderRadiusPx: nextBorderRadiusPx,
-      flatAreaScale,
-      edgeHardness,
+      flatAreaScale: flatAreaScale.value,
+      edgeHardness: edgeHardness.value,
     })
     normalMapUrl.value = generator.generate({ width, height, fragment })
     lastNormalMapMeta.value = nextMeta
@@ -550,7 +619,7 @@ const borderStroke = computed(() => {
 
 /** 边缘环宽度（px）：限制到当前尺寸下的可用范围，避免负尺寸或反向圆角 */
 const edgeRingWidthSafePx = computed(() => {
-  const raw = Math.max(0, edgeRingWidthPx)
+  const raw = Math.max(0, edgeRingWidthPx.value)
   const maxInset = Math.max(0, Math.min(svgSize.value.width, svgSize.value.height) / 2 - 1)
   return Math.min(raw, maxInset)
 })
@@ -559,20 +628,20 @@ const edgeRingWidthSafePx = computed(() => {
 const edgeFilterParams = computed(() => {
   return {
     /** 边缘环位移强度（scale） */
-    displacementScale: Math.max(0, edgeDisplacementScale),
+    displacementScale: Math.max(0, edgeDisplacementScale.value),
     /** 边缘环色散强度 */
-    aberrationIntensity: Math.max(0, edgeAberrationIntensity),
+    aberrationIntensity: Math.max(0, edgeAberrationIntensity.value),
   }
 })
 
 /** 是否处于“显示贴图”的调试模式（会隐藏玻璃效果层，避免干扰观察） */
-const isDebugMapMode = computed(() => debugNormalMap || debugEdgeRingMap)
+const isDebugMapMode = computed(() => debugNormalMap.value || debugEdgeRingMap.value)
 
 const edgeWarpStyle = computed<CSSProperties>(() => {
   // 边缘环亮度补偿：抵消“厚度/阴影”带来的整体变暗，避免环内侧发灰
-  const backdrop = `blur(${Math.max(0, edgeBlurPx)}px) saturate(${Math.max(
+  const backdrop = `blur(${Math.max(0, edgeBlurPx.value)}px) saturate(${Math.max(
     0,
-    edgeSaturation,
+    edgeSaturation.value,
   )}%)`
   const maskImage = edgeMaskUrl.value ? `url(${edgeMaskUrl.value})` : undefined
   return {
@@ -613,7 +682,7 @@ const showEdgeLayer = computed(
 )
 
 const warpStyle = computed<CSSProperties>(() => {
-  const backdrop = `blur(${blurPx}px) saturate(${saturation}%)`
+  const backdrop = `blur(${blurPx.value}px) saturate(${saturation.value}%)`
   return {
     // 贴图未生成前先降级为纯 backdrop-filter，避免 feImage 空 href 导致的闪烁/告警
     filter: normalMapUrl.value && !isDebugMapMode.value ? `url(#${filterId})` : undefined,

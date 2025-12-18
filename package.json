@@ -25,6 +25,10 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./web-component": {
+      "import": "./dist/web-component.js",
+      "require": "./dist/web-component.cjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
@@ -40,8 +44,13 @@
     "lint:fix": "eslint --fix",
     "release": "ppnm build && bumpp --commit --push --tag && pnpm publish"
   },
-  "dependencies": {
+  "peerDependencies": {
     "vue": "^3.5.25"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@antfu/eslint-config": "^6.7.1",
