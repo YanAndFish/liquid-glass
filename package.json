@@ -52,6 +52,9 @@
       "optional": true
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@antfu/eslint-config": "^6.7.1",
     "@types/node": "^25.0.3",
