@@ -1,7 +1,7 @@
 {
   "name": "@yafh/liquid-glass",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": false,
   "packageManager": "pnpm@10.24.0",
   "description": "Liquid Glass is a library for creating beautiful, responsive, and accessible UI components.",
@@ -42,7 +42,7 @@
     "type-check": "vue-tsc -b --noEmit",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "release": "pnpm build && bumpp --commit --push --tag && pnpm publish"
+    "release": "pnpm build && pnpm lint:fix && bumpp --commit --push --tag && pnpm publish"
   },
   "peerDependencies": {
     "vue": "^3.5.25"
