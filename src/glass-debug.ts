@@ -44,8 +44,6 @@ export interface GlassDebugState {
   debugNormalMap: boolean
   /** 调试：仅显示“边缘环区域”的位移贴图（用于观察 ring 区域） */
   debugEdgeRingMap: boolean
-  /** 是否展开调试面板 */
-  open: boolean
 }
 
 /**
@@ -73,7 +71,6 @@ export function createDefaultGlassDebugState(overrides: Partial<GlassDebugState>
     edgeHardness: 0.5,
     debugNormalMap: false,
     debugEdgeRingMap: false,
-    open: true,
     ...overrides,
   }
 }

@@ -166,26 +166,21 @@ const base = {
   clean: true,
   sourcemap: true,
   platform: 'browser',
-  exports: true,
+  // exports: true,
   tsconfig: './tsconfig.app.json',
   plugins: [Vue({ isProduction: true })],
+  hooks: {
+    'build:done': async function (ctx) {
+      await inlineCssToJs(ctx)
+    },
+  },
 } satisfies UserConfig
 
 export default defineConfig([{
   ...base,
   entry: './src/index.ts',
-  hooks: {
-    'build:done': async function (ctx) {
-      await inlineCssToJs(ctx)
-    },
-  },
 }, {
   ...base,
   entry: './src/web-component.ts',
   noExternal: ['vue'],
-  hooks: {
-    'build:done': async function (ctx) {
-      await inlineCssToJs(ctx)
-    },
-  },
 }])

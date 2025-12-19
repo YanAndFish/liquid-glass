@@ -1,19 +1,11 @@
 <script setup lang="ts">
 import type { ExtractPropTypes } from 'vue'
 import type { GlassDebugState } from './glass-debug'
-import { computed, reactive, watch } from 'vue'
+import { watch } from 'vue'
 import { createDefaultGlassDebugState } from './glass-debug'
 
 const props = withDefaults(
   defineProps<{
-    /**
-     * 调试面板状态（推荐传入 `reactive(createDefaultGlassDebugState())`）。
-     *
-     * 说明：
-     * - 该对象会被本组件直接修改（滑块/开关会写回这个对象）
-     * - 若不传入，则组件内部会创建一份默认状态并自管理
-     */
-    state?: GlassDebugState
     /**
      * 可选：将调试参数自动应用到目标元素（CSS 选择器）。
      *
@@ -33,25 +25,29 @@ const props = withDefaults(
     collapsible: true,
   },
 )
-
 const emit = defineEmits<{
-  /** 任意参数变更（包含 open） */
-  (e: 'glassDebugChange', value: GlassDebugState): void
   /** 点击“重置” */
   (e: 'reset', value: GlassDebugState): void
 }>()
 
+/**
+ * 调试面板状态（推荐传入 `reactive(createDefaultGlassDebugState())`）。
+ *
+ * 说明：
+ * - 该对象会被本组件直接修改（滑块/开关会写回这个对象）
+ * - 若不传入，则组件内部会创建一份默认状态并自管理
+ */
+
+const state = defineModel<GlassDebugState>('state', { default: createDefaultGlassDebugState() })
+
+const open = defineModel<boolean>('open', { default: true })
+
 export type GlassDebugPanelProps = ExtractPropTypes<typeof props>
 
-const internalState = reactive<GlassDebugState>(createDefaultGlassDebugState())
-const state = computed(() => props.state ?? internalState)
-
 watch(
-  () => state.value,
+  state,
   () => {
-    const snapshot: GlassDebugState = { ...state.value }
-    emit('glassDebugChange', snapshot)
-    applyStateToTarget(snapshot)
+    applyStateToTarget({ ...state.value })
   },
   { deep: true },
 )
@@ -82,16 +78,15 @@ watch(
 
 /** 重置 Glass 调试参数（默认不改变面板展开状态）。 */
 function resetGlassDebug() {
-  const keepOpen = state.value.open
-  Object.assign(state.value, createDefaultGlassDebugState({ open: keepOpen }))
-  emit('reset', { ...state.value })
+  state.value = createDefaultGlassDebugState()
+  emit('reset', state.value)
 }
 
 /** 切换面板展开/收起。 */
 function toggleOpen() {
   if (!props.collapsible)
     return
-  state.value.open = !state.value.open
+  open.value = !open.value
 }
 
 /** 对目标元素写入数字属性（以 attribute 形式）。 */
@@ -155,15 +150,15 @@ function applyStateToTarget(next: GlassDebugState) {
 </script>
 
 <template>
-  <div class="debug-panel" :class="{ open: state.open }">
+  <div class="debug-panel" :class="{ open }">
     <div class="debug-header">
       <span class="debug-title">{{ title }}</span>
       <button v-if="collapsible" class="debug-toggle" type="button" @click="toggleOpen">
-        {{ state.open ? '收起' : '展开' }}
+        {{ open ? '收起' : '展开' }}
       </button>
     </div>
 
-    <div v-if="state.open" class="debug-body">
+    <div v-if="open" class="debug-body">
       <details class="debug-group" open>
         <summary class="debug-summary">
           中心玻璃
@@ -470,7 +465,9 @@ function applyStateToTarget(next: GlassDebugState) {
   backdrop-filter: blur(12px);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
   color: rgba(255, 255, 255, 0.9);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: calc(100vh - 32px);
 }
 
 .debug-header {

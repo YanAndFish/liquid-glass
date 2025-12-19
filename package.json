@@ -38,6 +38,7 @@
     "dist"
   ],
   "scripts": {
+    "watch": "tsdown -w",
     "build": "tsdown",
     "type-check": "vue-tsc -b --noEmit",
     "lint": "eslint",

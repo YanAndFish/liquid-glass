@@ -103,6 +103,14 @@ interface Vec2 {
   y: number
 }
 
+/** 圆角半径（px），分别对应 X/Y 方向（用于适配椭圆圆角，如 `border-radius: 50%`）。 */
+interface BorderRadiiPx {
+  /** 水平方向圆角半径（px） */
+  rx: number
+  /** 垂直方向圆角半径（px） */
+  ry: number
+}
+
 /** 位移函数：输入 UV（0~1），输出新的采样 UV（0~1） */
 type DisplacementFragment = (uv: Vec2) => Vec2
 
@@ -122,8 +130,8 @@ interface EdgeRingMaskOptions {
   width: number
   /** 输出遮罩高度（CSS 像素） */
   height: number
-  /** 容器圆角（px） */
-  borderRadiusPx: number
+  /** 容器圆角（px），分别对应 X/Y 方向 */
+  borderRadiusPx: BorderRadiiPx
   /** 边缘环宽度（px） */
   ringWidthPx: number
   /** 内侧过渡宽度（px）：ring → 中心 的柔化区间 */
@@ -274,19 +282,22 @@ class AlphaMaskGenerator {
     const halfWidth = w / 2 - 0.5
     const halfHeight = h / 2 - 0.5
 
-    const outerRadius = Math.min(
-      Math.max(0, options.borderRadiusPx * dpiScale),
+    const outerRadiusX = Math.min(
+      Math.max(0, options.borderRadiusPx.rx * dpiScale),
       Math.max(0, halfWidth),
+    )
+    const outerRadiusY = Math.min(
+      Math.max(0, options.borderRadiusPx.ry * dpiScale),
       Math.max(0, halfHeight),
     )
+    const outerRadius = Math.min(outerRadiusX, outerRadiusY)
+    const isOuterEllipse = outerRadiusX >= halfWidth - 0.5 && outerRadiusY >= halfHeight - 0.5
 
     const innerHalfWidth = Math.max(1, halfWidth - ringWidthPx)
     const innerHalfHeight = Math.max(1, halfHeight - ringWidthPx)
-    const innerRadius = Math.min(
-      Math.max(0, outerRadius - ringWidthPx),
-      innerHalfWidth,
-      innerHalfHeight,
-    )
+    const innerRadiusX = Math.min(Math.max(0, outerRadiusX - ringWidthPx), innerHalfWidth)
+    const innerRadiusY = Math.min(Math.max(0, outerRadiusY - ringWidthPx), innerHalfHeight)
+    const innerRadius = Math.min(innerRadiusX, innerRadiusY)
 
     const imageData = this.context.createImageData(w, h)
     const data = imageData.data
@@ -296,8 +307,21 @@ class AlphaMaskGenerator {
         const px = x + 0.5 - w / 2
         const py = y + 0.5 - h / 2
 
-        const outerSdf = roundedRectSdf(px, py, halfWidth, halfHeight, outerRadius)
-        const innerSdf = roundedRectSdf(px, py, innerHalfWidth, innerHalfHeight, innerRadius)
+        let outerSdf = 0
+        if (isOuterEllipse)
+          outerSdf = ellipseSdfApprox(px, py, halfWidth, halfHeight)
+        else if (outerRadius <= 0.001)
+          outerSdf = rectSdfLInf(px, py, halfWidth, halfHeight)
+        else
+          outerSdf = roundedRectSdf(px, py, halfWidth, halfHeight, outerRadius)
+
+        let innerSdf = 0
+        if (isOuterEllipse)
+          innerSdf = ellipseSdfApprox(px, py, innerHalfWidth, innerHalfHeight)
+        else if (innerRadius <= 0.001)
+          innerSdf = rectSdfLInf(px, py, innerHalfWidth, innerHalfHeight)
+        else
+          innerSdf = roundedRectSdf(px, py, innerHalfWidth, innerHalfHeight, innerRadius)
 
         // outerInside: 形状内为 1，向外做少量 feather 用于抗锯齿
         const outerInside = 1 - smoothStep(0, outerFeatherPx, outerSdf)
@@ -363,8 +387,76 @@ function roundedRectSdf(
   )
 }
 
-/** 从元素的计算样式里读取圆角（px），并取四个角的最小值 */
-function getElementBorderRadiusPx(el: HTMLElement): number {
+/**
+ * 轴对齐矩形的“方角距离场”（非严格欧式距离）。
+ *
+ * 说明：
+ * - 标准矩形 SDF 在矩形外侧角点区域使用欧式距离（会形成 1/4 圆弧等距线）。
+ * - 本项目会用 SDF 的“距离”驱动 smoothstep 过渡；当圆角为 0 时，欧式等距线会让
+ *   位移贴图里“接近 0 位移”的区域看起来像被圆角化（即使真实边界是直角）。
+ * - 这里使用切比雪夫距离（L∞）保持过渡等距线为方角矩形，便于做 0 圆角的玻璃。
+ */
+function rectSdfLInf(x: number, y: number, halfWidth: number, halfHeight: number): number {
+  const qx = Math.abs(x) - halfWidth
+  const qy = Math.abs(y) - halfHeight
+  return Math.max(qx, qy)
+}
+
+/**
+ * 计算椭圆的近似 SDF（Signed Distance Field）。
+ *
+ * 说明：
+ * - 这是一个“足够平滑”的近似距离（基于隐式方程的一阶近似），用于驱动 smoothstep 过渡。
+ * - 对于 `border-radius: 50%` 这类椭圆形容器，可避免用圆角矩形近似导致的“平坦区不跟随大圆角”问题。
+ */
+function ellipseSdfApprox(x: number, y: number, radiusX: number, radiusY: number): number {
+  const a = Math.max(1e-6, radiusX)
+  const b = Math.max(1e-6, radiusY)
+  const px = Math.abs(x)
+  const py = Math.abs(y)
+
+  // 中心点处梯度为 0，直接返回最短轴长度作为“内部距离”
+  if (px < 1e-6 && py < 1e-6)
+    return -Math.min(a, b)
+
+  const invA = 1 / a
+  const invB = 1 / b
+  const nx = px * invA
+  const ny = py * invB
+  const f = nx * nx + ny * ny - 1
+
+  const gx = px * invA * invA
+  const gy = py * invB * invB
+  const grad = 2 * Math.max(1e-6, Math.sqrt(gx * gx + gy * gy))
+  return f / grad
+}
+
+/** 解析单个圆角值（px 或 %），并转换为像素值。 */
+function parseBorderRadiusTokenPx(token: string, reference: number): number {
+  const raw = token.trim()
+  if (!raw)
+    return 0
+
+  if (raw.endsWith('%')) {
+    const percent = Number.parseFloat(raw)
+    return Number.isFinite(percent) ? (percent / 100) * reference : 0
+  }
+
+  const value = Number.parseFloat(raw)
+  return Number.isFinite(value) ? value : 0
+}
+
+/**
+ * 从元素的计算样式里读取圆角（px），并取四个角的最小值。
+ *
+ * 说明：
+ * - `getComputedStyle(...).borderTopLeftRadius` 等可能返回：
+ *   - `12px`
+ *   - `50%`
+ *   - `12px 24px`（椭圆圆角：水平/垂直半径）
+ * - 这里会把 `%` 按当前元素尺寸换算成像素，并保留 rx/ry 两个方向的半径信息。
+ */
+function getElementBorderRadiiPx(el: HTMLElement, width: number, height: number): BorderRadiiPx {
   const style = getComputedStyle(el)
   const candidates = [
     style.borderTopLeftRadius,
@@ -372,11 +464,29 @@ function getElementBorderRadiusPx(el: HTMLElement): number {
     style.borderBottomRightRadius,
     style.borderBottomLeftRadius,
   ]
-  const numbers = candidates
-    .map(value => Number.parseFloat(value))
-    .filter(value => Number.isFinite(value))
 
-  return numbers.length ? Math.max(0, Math.min(...numbers)) : 0
+  const radii = candidates
+    .map((value) => {
+      const normalized = value.replace('/', ' ').trim()
+      const parts = normalized.split(/\s+/).filter(Boolean)
+      const horizontal = parts[0] ?? '0'
+      const vertical = parts[1] ?? parts[0] ?? '0'
+      const rx = parseBorderRadiusTokenPx(horizontal, width)
+      const ry = parseBorderRadiusTokenPx(vertical, height)
+      return {
+        rx: Number.isFinite(rx) ? Math.max(0, rx) : 0,
+        ry: Number.isFinite(ry) ? Math.max(0, ry) : 0,
+      }
+    })
+    .filter(r => Number.isFinite(r.rx) && Number.isFinite(r.ry))
+
+  if (!radii.length)
+    return { rx: 0, ry: 0 }
+
+  return {
+    rx: Math.min(...radii.map(r => r.rx)),
+    ry: Math.min(...radii.map(r => r.ry)),
+  }
 }
 
 /** 位移贴图 fragment 参数 */
@@ -385,8 +495,8 @@ interface LiquidGlassFragmentParams {
   width: number
   /** 贴图高度（px） */
   height: number
-  /** 容器圆角（px） */
-  borderRadiusPx: number
+  /** 容器圆角（px），分别对应 X/Y 方向 */
+  borderRadiusPx: BorderRadiiPx
   /** 平坦区大小（0~1，越大越贴近容器边缘） */
   flatAreaScale: number
   /** 边缘硬度（越大越硬，过渡越短） */
@@ -403,6 +513,10 @@ function createLiquidGlassFragment(params: LiquidGlassFragmentParams): Displacem
   const halfWidth = width / 2
   const halfHeight = height / 2
 
+  const borderRadiusRx = Math.min(Math.max(0, params.borderRadiusPx.rx), halfWidth)
+  const borderRadiusRy = Math.min(Math.max(0, params.borderRadiusPx.ry), halfHeight)
+  const isEllipse = borderRadiusRx >= halfWidth - 0.5 && borderRadiusRy >= halfHeight - 0.5
+
   // 以“平坦区边界到容器边界的宽度（inset）”作为变量，确保四边宽度一致（不随长宽比改变）
   // flatAreaScale 越大 => inset 越小 => 平坦区越接近容器边缘
   const flatScale = Math.max(0, Math.min(1, params.flatAreaScale))
@@ -412,8 +526,9 @@ function createLiquidGlassFragment(params: LiquidGlassFragmentParams): Displacem
   const innerHalfWidth = Math.max(1, halfWidth - insetPx)
   const innerHalfHeight = Math.max(1, halfHeight - insetPx)
 
-  // 圆角矩形向内 inset 后，圆角半径同样按 inset 收缩（<= 0 则退化为直角）
-  const rawRadius = Math.max(0, params.borderRadiusPx - insetPx)
+  // 平坦区边界圆角：按 flatAreaScale 等比收缩，避免 inset 较大时过早退化为直角
+  const cornerRadius = Math.min(borderRadiusRx, borderRadiusRy)
+  const rawRadius = Math.max(0, cornerRadius * flatScale)
   const innerRadius = Math.min(rawRadius, innerHalfWidth, innerHalfHeight)
 
   // 用“平坦区”与容器边缘的 inset 宽度来决定过渡长度（硬度越大，过渡越短）
@@ -421,11 +536,19 @@ function createLiquidGlassFragment(params: LiquidGlassFragmentParams): Displacem
   const hardness = Math.max(0.1, params.edgeHardness)
   const transitionPx = Math.max(1, ringThickness / hardness)
 
+  const useSharpCornerMetric = !isEllipse && innerRadius <= 0.001
+
   return (uv) => {
     const x = (uv.x - 0.5) * width
     const y = (uv.y - 0.5) * height
 
-    const distanceToInnerEdge = roundedRectSdf(x, y, innerHalfWidth, innerHalfHeight, innerRadius)
+    let distanceToInnerEdge = 0
+    if (isEllipse)
+      distanceToInnerEdge = ellipseSdfApprox(x, y, innerHalfWidth, innerHalfHeight)
+    else if (useSharpCornerMetric)
+      distanceToInnerEdge = rectSdfLInf(x, y, innerHalfWidth, innerHalfHeight)
+    else
+      distanceToInnerEdge = roundedRectSdf(x, y, innerHalfWidth, innerHalfHeight, innerRadius)
     const displacement = smoothStep(transitionPx, 0, distanceToInnerEdge)
     const scaled = smoothStep(0, 1, displacement)
 
@@ -492,7 +615,7 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const svgSize = ref({ width: 1, height: 1 })
 const normalMapUrl = ref<string>('')
 const edgeMaskUrl = ref<string>('')
-const borderRadiusPx = ref(0)
+const borderRadiiPx = ref<BorderRadiiPx>({ rx: 0, ry: 0 })
 
 /** 当前已生成贴图对应的参数（用于避免无意义的重复生成） */
 interface NormalMapMeta {
@@ -500,8 +623,10 @@ interface NormalMapMeta {
   width: number
   /** 贴图高度（px） */
   height: number
-  /** 圆角（px） */
-  borderRadiusPx: number
+  /** 圆角：水平半径（px） */
+  borderRadiusRxPx: number
+  /** 圆角：垂直半径（px） */
+  borderRadiusRyPx: number
   /** 平坦区大小（0~1） */
   flatAreaScale: number
   /** 边缘硬度 */
@@ -516,8 +641,10 @@ interface EdgeMaskMeta {
   width: number
   /** 遮罩高度（px） */
   height: number
-  /** 圆角（px） */
-  borderRadiusPx: number
+  /** 圆角：水平半径（px） */
+  borderRadiusRxPx: number
+  /** 圆角：垂直半径（px） */
+  borderRadiusRyPx: number
   /** 边缘环宽度（px） */
   ringWidthPx: number
   /** 内侧过渡宽度（px） */
@@ -531,6 +658,7 @@ const lastEdgeMaskMeta = ref<EdgeMaskMeta | null>(null)
 let generator: DisplacementMapGenerator | null = null
 let maskGenerator: AlphaMaskGenerator | null = null
 let resizeObserver: ResizeObserver | null = null
+let mutationObserver: MutationObserver | null = null
 let rafId: number | null = null
 
 /** 读取尺寸并更新贴图（使用 rAF 合并频繁 resize 事件） */
@@ -543,16 +671,17 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
     const width = Math.max(1, Math.round(nextWidth))
     const height = Math.max(1, Math.round(nextHeight))
 
-    const nextBorderRadiusPx = containerRef.value
-      ? getElementBorderRadiusPx(containerRef.value)
-      : borderRadiusPx.value
-    borderRadiusPx.value = nextBorderRadiusPx
+    const nextBorderRadiiPx = containerRef.value
+      ? getElementBorderRadiiPx(containerRef.value, width, height)
+      : borderRadiiPx.value
+    borderRadiiPx.value = nextBorderRadiiPx
     svgSize.value = { width, height }
 
     const nextMeta: NormalMapMeta = {
       width,
       height,
-      borderRadiusPx: nextBorderRadiusPx,
+      borderRadiusRxPx: nextBorderRadiiPx.rx,
+      borderRadiusRyPx: nextBorderRadiiPx.ry,
       flatAreaScale: flatAreaScale.value,
       edgeHardness: edgeHardness.value,
     }
@@ -576,7 +705,8 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
       = lastMeta !== null
         && lastMeta.width === nextMeta.width
         && lastMeta.height === nextMeta.height
-        && lastMeta.borderRadiusPx === nextMeta.borderRadiusPx
+        && lastMeta.borderRadiusRxPx === nextMeta.borderRadiusRxPx
+        && lastMeta.borderRadiusRyPx === nextMeta.borderRadiusRyPx
         && lastMeta.flatAreaScale === nextMeta.flatAreaScale
         && lastMeta.edgeHardness === nextMeta.edgeHardness
 
@@ -599,7 +729,8 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
         const nextMaskMeta: EdgeMaskMeta = {
           width,
           height,
-          borderRadiusPx: nextBorderRadiusPx,
+          borderRadiusRxPx: nextBorderRadiiPx.rx,
+          borderRadiusRyPx: nextBorderRadiiPx.ry,
           ringWidthPx,
           innerFeatherPx,
           outerFeatherPx,
@@ -610,7 +741,8 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
           = lastMaskMeta !== null
             && lastMaskMeta.width === nextMaskMeta.width
             && lastMaskMeta.height === nextMaskMeta.height
-            && lastMaskMeta.borderRadiusPx === nextMaskMeta.borderRadiusPx
+            && lastMaskMeta.borderRadiusRxPx === nextMaskMeta.borderRadiusRxPx
+            && lastMaskMeta.borderRadiusRyPx === nextMaskMeta.borderRadiusRyPx
             && lastMaskMeta.ringWidthPx === nextMaskMeta.ringWidthPx
             && lastMaskMeta.innerFeatherPx === nextMaskMeta.innerFeatherPx
             && lastMaskMeta.outerFeatherPx === nextMaskMeta.outerFeatherPx
@@ -619,7 +751,7 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
           edgeMaskUrl.value = maskGenerator.generateEdgeRingMask({
             width,
             height,
-            borderRadiusPx: nextBorderRadiusPx,
+            borderRadiusPx: nextBorderRadiiPx,
             ringWidthPx,
             innerFeatherPx,
             outerFeatherPx,
@@ -638,7 +770,7 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
     const fragment = createLiquidGlassFragment({
       width,
       height,
-      borderRadiusPx: nextBorderRadiusPx,
+      borderRadiusPx: nextBorderRadiiPx,
       flatAreaScale: flatAreaScale.value,
       edgeHardness: edgeHardness.value,
     })
@@ -647,12 +779,48 @@ function scheduleResizeUpdate(nextWidth: number, nextHeight: number, force = fal
   })
 }
 
+/**
+ * 监听容器/宿主元素的 style/class 变化，并触发贴图重生成。
+ *
+ * 背景：
+ * - 位移贴图需要用到容器的计算圆角（`getComputedStyle(...).borderRadius`）。
+ * - 仅靠 `ResizeObserver` 无法捕获“圆角变化但尺寸不变”的场景（例如外部通过 style/class/CSS 变量动态改圆角）。
+ * - Web Component 场景中，CSS 变量通常写在 `:host` 上，因此也需要监听宿主元素。
+ */
+function observeStyleChanges() {
+  if (!containerRef.value || typeof MutationObserver === 'undefined')
+    return
+
+  mutationObserver = new MutationObserver(() => {
+    if (!containerRef.value)
+      return
+    const rect = containerRef.value.getBoundingClientRect()
+    scheduleResizeUpdate(rect.width, rect.height)
+  })
+
+  // Vue 组件场景：大概率通过内联 style / class 改 root 容器
+  mutationObserver.observe(containerRef.value, {
+    attributes: true,
+    attributeFilter: ['style', 'class'],
+  })
+
+  // Web Component 场景：外部常把 CSS 变量写在 host 上
+  const root = containerRef.value.getRootNode()
+  if (root instanceof ShadowRoot && root.host) {
+    mutationObserver.observe(root.host, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    })
+  }
+}
+
 /** SVG 边缘高光描边参数（跟随尺寸/圆角变化） */
 const borderStroke = computed(() => {
   const inset = highlightBorderWidthPx / 2
   const width = Math.max(0, svgSize.value.width - inset * 2)
   const height = Math.max(0, svgSize.value.height - inset * 2)
-  const rx = Math.max(0, borderRadiusPx.value - inset)
+  const rx = Math.max(0, Math.min(borderRadiiPx.value.rx - inset, width / 2))
+  const ry = Math.max(0, Math.min(borderRadiiPx.value.ry - inset, height / 2))
 
   return {
     /** SVG 矩形 X（px） */
@@ -663,8 +831,10 @@ const borderStroke = computed(() => {
     width,
     /** SVG 矩形高度（px） */
     height,
-    /** SVG 圆角（px） */
+    /** SVG 圆角：水平半径（px） */
     rx,
+    /** SVG 圆角：垂直半径（px） */
+    ry,
     /** 描边宽度（px） */
     strokeWidth: highlightBorderWidthPx,
   }
@@ -814,6 +984,8 @@ onMounted(() => {
 
   const rect = containerRef.value.getBoundingClientRect()
   scheduleResizeUpdate(rect.width, rect.height)
+
+  observeStyleChanges()
 })
 
 onUnmounted(() => {
@@ -821,6 +993,8 @@ onUnmounted(() => {
     cancelAnimationFrame(rafId)
   resizeObserver?.disconnect()
   resizeObserver = null
+  mutationObserver?.disconnect()
+  mutationObserver = null
 
   generator?.destroy()
   generator = null
@@ -1098,7 +1272,12 @@ onUnmounted(() => {
     <!-- 边缘环层：更小 blur + 更强折射（只显示 ring 区域），用于逼近 Apple 的“透镜边缘”观感 -->
     <span v-if="showEdgeLayer" class="glass-edge" :style="edgeWarpStyle" />
 
-    <div class="glass-content" :class="contentClass" :style="contentStyle">
+    <div
+      class="glass-content"
+      :class="[contentClass, { 'glass-content--hidden': isDebugMapMode }]"
+      :style="contentStyle"
+      :aria-hidden="isDebugMapMode ? 'true' : undefined"
+    >
       <slot />
     </div>
 
@@ -1143,7 +1322,7 @@ onUnmounted(() => {
           :width="borderStroke.width"
           :height="borderStroke.height"
           :rx="borderStroke.rx"
-          :ry="borderStroke.rx"
+          :ry="borderStroke.ry"
           fill="none"
           :stroke="`url(#${borderSoftGradientId})`"
           :stroke-width="borderStroke.strokeWidth"
@@ -1157,7 +1336,7 @@ onUnmounted(() => {
           :width="borderStroke.width"
           :height="borderStroke.height"
           :rx="borderStroke.rx"
-          :ry="borderStroke.rx"
+          :ry="borderStroke.ry"
           fill="none"
           :stroke="`url(#${borderStrongGradientId})`"
           :stroke-width="borderStroke.strokeWidth"
@@ -1170,14 +1349,18 @@ onUnmounted(() => {
   </div>
 </template>
 
+<style>
+:host {
+  display: block;
+}
+</style>
+
 <style scoped>
 .glass-container {
-  width: 250px;
-  height: 150px;
   position: relative;
   overflow: hidden;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--liquid-glass-border-radius);
+  border: var(--liquid-glass-border);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
 }
 
@@ -1222,8 +1405,12 @@ onUnmounted(() => {
 
 .glass-content {
   z-index: 1;
-  position: absolute;
-  inset: 0;
+  position: relative;
+}
+
+.glass-content--hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .glass-border-svg {
