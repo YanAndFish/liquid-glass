@@ -1102,8 +1102,21 @@ onUnmounted(() => {
           <feBlend in="GREEN_CHANNEL" in2="BLUE_CHANNEL" mode="screen" result="GB_COMBINED" />
           <feBlend in="RED_CHANNEL" in2="GB_COMBINED" mode="screen" result="RGB_COMBINED" />
 
-          <feGaussianBlur
+          <!--
+            修正边缘“撕裂/露底”：
+            - 由于 feBlend(screen) 会同时混合 alpha，圆角抗锯齿区域的 alpha 会被放大。
+            - 这里用 Porter-Duff `atop` 将输出 alpha 强制对齐 SourceGraphic 的 alpha，
+              同时尽可能保持 RGB 不变，避免出现边缘黑边/变暗。
+           -->
+          <feComposite
             in="RGB_COMBINED"
+            in2="SourceGraphic"
+            operator="atop"
+            result="RGB_COMBINED_FIXED_ALPHA"
+          />
+
+          <feGaussianBlur
+            in="RGB_COMBINED_FIXED_ALPHA"
             :stdDeviation="Math.max(0.1, 0.5 - aberrationIntensity * 0.1)"
             result="ABERRATED_BLURRED"
           />
@@ -1125,7 +1138,14 @@ onUnmounted(() => {
             result="CENTER_CLEAN"
           />
 
-          <feComposite in="EDGE_ABERRATION" in2="CENTER_CLEAN" operator="over" />
+          <feComposite in="EDGE_ABERRATION" in2="CENTER_CLEAN" operator="over" result="COMBINED" />
+
+          <!-- 最终输出同样对齐 SourceGraphic 的 alpha，避免边缘出现额外“描边/撕裂” -->
+          <feComposite
+            in="COMBINED"
+            in2="SourceGraphic"
+            operator="atop"
+          />
         </filter>
 
         <!-- 边缘环滤镜：与中心分离，用更强的折射/色散来模拟“厚透镜边缘” -->
@@ -1223,8 +1243,11 @@ onUnmounted(() => {
           <feBlend in="GREEN_CHANNEL" in2="BLUE_CHANNEL" mode="screen" result="GB_COMBINED" />
           <feBlend in="RED_CHANNEL" in2="GB_COMBINED" mode="screen" result="RGB_COMBINED" />
 
+          <!-- 同中心滤镜：对齐 alpha，避免边缘出现“撕裂/露底” -->
+          <feComposite in="RGB_COMBINED" in2="SourceGraphic" operator="atop" result="RGB_COMBINED_FIXED_ALPHA" />
+
           <feGaussianBlur
-            in="RGB_COMBINED"
+            in="RGB_COMBINED_FIXED_ALPHA"
             :stdDeviation="Math.max(0.1, 0.5 - edgeFilterParams.aberrationIntensity * 0.1)"
             result="ABERRATED_BLURRED"
           />
@@ -1246,7 +1269,10 @@ onUnmounted(() => {
             result="CENTER_CLEAN"
           />
 
-          <feComposite in="EDGE_ABERRATION" in2="CENTER_CLEAN" operator="over" />
+          <feComposite in="EDGE_ABERRATION" in2="CENTER_CLEAN" operator="over" result="COMBINED" />
+
+          <!-- 同中心滤镜：最终对齐 SourceGraphic alpha -->
+          <feComposite in="COMBINED" in2="SourceGraphic" operator="atop" />
         </filter>
       </defs>
     </svg>
